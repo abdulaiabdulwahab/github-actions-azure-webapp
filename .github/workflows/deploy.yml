@@ -1,0 +1,181 @@
+name: CI-CD Azure Web App
+
+on:
+
+  # Test pull requests
+  pull_request:
+    branches:
+      - main
+
+  # Test and deploy commits merged/pushed to main
+  push:
+    branches:
+      - main
+
+  # Manual execution
+  workflow_dispatch:
+
+
+# Default token permission
+permissions:
+  contents: read
+
+
+env:
+
+  # Centralized runtime setting
+  PYTHON_VERSION: "3.13"
+
+
+jobs:
+
+  # ==========================================================
+  # JOB 1
+  # Continuous Integration
+  # ==========================================================
+
+  test:
+
+    name: Test Application
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # Download repository
+      - name: Checkout source code
+        uses: actions/checkout@v7
+
+
+      # Configure Python
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+
+      # Install project dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+
+      # Run automated tests
+      - name: Run tests
+        run: |
+          pytest -v
+
+
+  # ==========================================================
+  # JOB 2
+  # Package application
+  # ==========================================================
+
+  package:
+
+    name: Package Application
+
+    # Package only after tests succeed
+    needs:
+      - test
+
+    # Do not create production deployment packages for PRs
+    if: github.event_name != 'pull_request'
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout source code
+        uses: actions/checkout@v7
+
+
+      # Package only files required by the application
+      - name: Create deployment package
+        run: |
+          zip -r release.zip \
+            app.py \
+            requirements.txt
+
+
+      # Save package for deployment job
+      - name: Upload application artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webapp-package
+          path: release.zip
+          retention-days: 5
+
+
+  # ==========================================================
+  # JOB 3
+  # Production deployment
+  # ==========================================================
+
+  deploy:
+
+    name: Deploy Production
+
+    needs:
+      - package
+
+    runs-on: ubuntu-latest
+
+
+    # GitHub Environment
+    environment:
+      name: production
+
+
+    # Required for Azure OIDC
+    permissions:
+
+      # GitHub must be able to request an OIDC identity token
+      id-token: write
+
+      # Required by checkout/normal workflow operations
+      contents: read
+
+
+    steps:
+
+      # Retrieve build artifact
+      - name: Download application artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: webapp-package
+
+
+      # Passwordless authentication to Azure
+      - name: Login to Azure using OIDC
+        uses: azure/login@v3
+
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+
+      # Deploy application
+      - name: Deploy to Azure App Service
+        uses: azure/webapps-deploy@v3
+
+        with:
+          app-name: ${{ vars.AZURE_WEBAPP_NAME }}
+
+          package: release.zip
+
+
+      # Verify application is responding
+      - name: Application health check
+        run: |
+
+          curl \
+            --fail \
+            --retry 10 \
+            --retry-delay 10 \
+            "https://${{ vars.AZURE_WEBAPP_NAME }}.azurewebsites.net/health"

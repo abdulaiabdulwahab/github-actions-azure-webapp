@@ -1,0 +1,11 @@
+github-actions-azure-webapp/
+│
+├── app.py
+├── requirements.txt
+│
+├── tests/
+│   └── test_app.py
+│
+└── .github/
+    └── workflows/
+        └── deploy.yml
